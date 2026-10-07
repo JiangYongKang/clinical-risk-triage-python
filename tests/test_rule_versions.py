@@ -4,7 +4,7 @@ import logging
 import pytest
 
 from app.errors import RuleConfigError, RuleVersionNotFoundError
-from app.models import PatientCase, RiskLevel, RuleVersion
+from app.models import RiskLevel, RuleVersion
 from tests.conftest import make_rule
 
 log = logging.getLogger(__name__)

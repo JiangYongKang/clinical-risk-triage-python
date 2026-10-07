@@ -14,7 +14,14 @@ from .errors import (
     DuplicateSubmissionError,
     IllegalTransitionError,
 )
-from .models import ALLOWED_TRANSITIONS, Assessment, CaseStatus, PatientCase
+from .models import (
+    ALLOWED_TRANSITIONS,
+    Assessment,
+    AssessmentKind,
+    AssessmentRecord,
+    CaseStatus,
+    PatientCase,
+)
 
 
 class CaseStore:
@@ -24,6 +31,7 @@ class CaseStore:
         self._status: dict[str, CaseStatus] = {}
         self._assessments: dict[str, Assessment] = {}
         self._idempotency: dict[str, str] = {}  # key -> case_id
+        self._history: dict[str, list[AssessmentRecord]] = {}
 
     def submit(self, idempotency_key: str, case: PatientCase) -> PatientCase:
         with self._lock:
@@ -80,3 +88,21 @@ class CaseStore:
                 raise CaseNotFoundError(
                     f"病例 {case_id} 尚无评估结论"
                 ) from None
+
+    def append_record(
+        self, case_id: str, kind: AssessmentKind, assessment: Assessment
+    ) -> AssessmentRecord:
+        """追加一条评估轨迹记录：只增不改，序号按发生顺序单调递增。"""
+        with self._lock:
+            records = self._history.setdefault(case_id, [])
+            record = AssessmentRecord(
+                seq=len(records) + 1, kind=kind, assessment=assessment
+            )
+            records.append(record)
+            return record
+
+    def get_history(self, case_id: str) -> tuple[AssessmentRecord, ...]:
+        """按发生顺序返回完整轨迹；病例不存在则报错，无记录返回空。"""
+        with self._lock:
+            self.get_case(case_id)  # 复用存在性校验
+            return tuple(self._history.get(case_id, ()))

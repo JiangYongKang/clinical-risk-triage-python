@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class CaseStatus(str, enum.Enum):
@@ -53,7 +53,7 @@ class RuleVersion:
     symptom_weights: dict[str, float]
     level_cutoffs: dict[str, float]
     created_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
+        default_factory=lambda: datetime.now(UTC)
     )
 
 
@@ -67,5 +67,21 @@ class Assessment:
     score: float
     rationale: tuple[str, ...]
     evaluated_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
+        default_factory=lambda: datetime.now(UTC)
     )
+
+
+class AssessmentKind(str, enum.Enum):
+    """评估轨迹记录的来源类型。"""
+
+    EVALUATE = "EVALUATE"  # 正式评估（绑定结论）
+    REASSESS = "REASSESS"  # 指定版本重算（只读复核）
+
+
+@dataclass(frozen=True)
+class AssessmentRecord:
+    """评估轨迹中的一条记录：有序、不可改写。"""
+
+    seq: int
+    kind: AssessmentKind
+    assessment: Assessment

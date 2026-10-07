@@ -33,6 +33,12 @@ class RuleVersionNotFoundError(TriageError):
     code = "RULE_VERSION_NOT_FOUND"
 
 
+class InvalidRequestError(TriageError):
+    """请求体字段缺失/类型错误等输入问题（归一化，不透出框架细节）。"""
+
+    code = "INVALID_REQUEST"
+
+
 class RuleConfigError(TriageError):
     """规则配置错误（依赖异常归一化）。"""
 

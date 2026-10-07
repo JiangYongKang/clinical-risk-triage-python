@@ -1,14 +1,23 @@
-"""分诊服务编排：提交、评估、流转与并发归一化。
+"""分诊服务编排：提交、评估、重算、流转与并发归一化。
 
 - evaluate_case 对同一病例加锁，并发请求共享同一结论；
 - 评估成功后自动将 SUBMITTED -> EVALUATED；
+- reassess_case 为只读复现：按指定版本重算并核对，不覆盖既有结论；
+- 每次正式评估与重算都会追加到评估轨迹，历史记录不可改写；
 - 规则层的配置错误/内部异常以可区分类型向上传递。
 """
 from __future__ import annotations
 
 import threading
 
-from .models import Assessment, CaseStatus, PatientCase
+from .errors import RuleVersionMismatchError
+from .models import (
+    Assessment,
+    AssessmentKind,
+    AssessmentRecord,
+    CaseStatus,
+    PatientCase,
+)
 from .rules import RuleRegistry
 from .store import CaseStore
 
@@ -41,9 +50,37 @@ class TriageService:
                 pass
             assessment = self._rules.evaluate(case, rule_version)
             saved = self._store.save_assessment(assessment)
+            self._store.append_record(
+                AssessmentRecord.from_assessment(saved, AssessmentKind.EVALUATE)
+            )
             if self._store.get_status(case_id) == CaseStatus.SUBMITTED:
                 self._store.transition(case_id, CaseStatus.EVALUATED)
             return saved
+
+    def reassess_case(self, case_id: str, rule_version: str) -> Assessment:
+        """按指定规则版本只读重算，复现病例绑定结论。
+
+        - 版本未注册 -> RuleVersionNotFoundError；
+        - 版本与病例绑定版本不一致 -> RuleVersionMismatchError；
+        - 不覆盖既有结论，重算结果追加到评估轨迹（同版本去重）。
+        """
+        case = self._store.get_case(case_id)
+        with self._lock_for(case_id):
+            bound = self._store.get_assessment(case_id)  # 未评估过 -> 404
+            rule = self._rules.get(rule_version)  # 未注册 -> 404
+            if rule.version != bound.rule_version:
+                raise RuleVersionMismatchError(bound.rule_version, rule.version)
+            recomputed = self._rules.evaluate(case, rule_version)
+            self._store.append_record(
+                AssessmentRecord.from_assessment(
+                    recomputed, AssessmentKind.REASSESS
+                )
+            )
+            return recomputed
+
+    def get_trail(self, case_id: str) -> list[AssessmentRecord]:
+        """按发生顺序返回病例完整评估轨迹。"""
+        return self._store.list_records(case_id)
 
     def transition_case(self, case_id: str, target: CaseStatus) -> CaseStatus:
         return self._store.transition(case_id, target)

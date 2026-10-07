@@ -69,3 +69,42 @@ class Assessment:
     evaluated_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+
+
+class AssessmentKind(str, enum.Enum):
+    """轨迹记录来源：正式评估 / 指定版本重算。"""
+
+    EVALUATE = "EVALUATE"
+    REASSESS = "REASSESS"
+
+
+@dataclass(frozen=True)
+class AssessmentRecord:
+    """评估轨迹中的一条记录（追加式、不可改写）。
+
+    同一病例同一来源同一规则版本只保留一条（并发去重），
+    后续新规则版本上线不影响已落盘的记录。
+    """
+
+    case_id: str
+    kind: AssessmentKind
+    rule_version: str
+    risk_level: RiskLevel
+    score: float
+    rationale: tuple[str, ...]
+    recorded_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    @classmethod
+    def from_assessment(
+        cls, assessment: Assessment, kind: AssessmentKind
+    ) -> AssessmentRecord:
+        return cls(
+            case_id=assessment.case_id,
+            kind=kind,
+            rule_version=assessment.rule_version,
+            risk_level=assessment.risk_level,
+            score=assessment.score,
+            rationale=assessment.rationale,
+        )

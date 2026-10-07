@@ -33,6 +33,19 @@ class RuleVersionNotFoundError(TriageError):
     code = "RULE_VERSION_NOT_FOUND"
 
 
+class RuleVersionMismatchError(TriageError):
+    """重算指定版本与病例实际绑定的规则版本不一致。"""
+
+    code = "RULE_VERSION_MISMATCH"
+
+    def __init__(self, bound: str, requested: str) -> None:
+        super().__init__(
+            f"请求版本 {requested} 与病例绑定版本 {bound} 不一致"
+        )
+        self.bound = bound
+        self.requested = requested
+
+
 class RuleConfigError(TriageError):
     """规则配置错误（依赖异常归一化）。"""
 

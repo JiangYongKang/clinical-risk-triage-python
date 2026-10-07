@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -11,10 +12,11 @@ from .errors import (
     IllegalTransitionError,
     RuleConfigError,
     RuleEvaluationError,
+    RuleVersionMismatchError,
     RuleVersionNotFoundError,
     TriageError,
 )
-from .models import CaseStatus, PatientCase, RuleVersion
+from .models import Assessment, CaseStatus, PatientCase, RuleVersion
 from .rules import RuleRegistry
 from .service import TriageService
 from .store import CaseStore
@@ -22,11 +24,14 @@ from .store import CaseStore
 _ERROR_STATUS = {
     DuplicateSubmissionError.code: 409,
     IllegalTransitionError.code: 409,
+    RuleVersionMismatchError.code: 409,
     CaseNotFoundError.code: 404,
     RuleVersionNotFoundError.code: 404,
     RuleConfigError.code: 422,
     RuleEvaluationError.code: 500,
 }
+
+_INVALID_REQUEST_CODE = "INVALID_REQUEST"
 
 
 class CaseIn(BaseModel):
@@ -63,6 +68,16 @@ def _default_rules() -> RuleRegistry:
     return reg
 
 
+def _assessment_payload(a: Assessment) -> dict:
+    return {
+        "case_id": a.case_id,
+        "rule_version": a.rule_version,
+        "risk_level": a.risk_level.value,
+        "score": a.score,
+        "rationale": list(a.rationale),
+    }
+
+
 def create_app(service: TriageService | None = None) -> FastAPI:
     app = FastAPI(title="clinical-risk-triage")
     if service is None:
@@ -75,6 +90,28 @@ def create_app(service: TriageService | None = None) -> FastAPI:
         return JSONResponse(
             status_code=status,
             content={"error": {"code": exc.code, "message": str(exc)}},
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        _: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        # 请求体字段缺失/类型错误归一化为统一错误结构，
+        # 不透出框架底层的原始校验细节
+        fields = sorted(
+            {
+                ".".join(str(part) for part in err.get("loc", ()))
+                for err in exc.errors()
+            }
+        )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": _INVALID_REQUEST_CODE,
+                    "message": f"请求参数不合法，涉及字段: {fields}",
+                }
+            },
         )
 
     @app.post("/cases", status_code=201)
@@ -94,12 +131,30 @@ def create_app(service: TriageService | None = None) -> FastAPI:
     @app.post("/cases/{case_id}/evaluate")
     def evaluate_case(case_id: str, rule_version: str | None = None) -> dict:
         a = app.state.service.evaluate_case(case_id, rule_version)
+        return _assessment_payload(a)
+
+    @app.post("/cases/{case_id}/reassess")
+    def reassess_case(case_id: str, rule_version: str) -> dict:
+        # 只读复现：按指定版本重算，不覆盖病例绑定结论
+        a = app.state.service.reassess_case(case_id, rule_version)
+        return _assessment_payload(a)
+
+    @app.get("/cases/{case_id}/assessments")
+    def get_trail(case_id: str) -> dict:
+        records = app.state.service.get_trail(case_id)
         return {
-            "case_id": a.case_id,
-            "rule_version": a.rule_version,
-            "risk_level": a.risk_level.value,
-            "score": a.score,
-            "rationale": list(a.rationale),
+            "case_id": case_id,
+            "records": [
+                {
+                    "kind": r.kind.value,
+                    "rule_version": r.rule_version,
+                    "risk_level": r.risk_level.value,
+                    "score": r.score,
+                    "rationale": list(r.rationale),
+                    "recorded_at": r.recorded_at.isoformat(),
+                }
+                for r in records
+            ],
         }
 
     @app.post("/cases/{case_id}/transitions")

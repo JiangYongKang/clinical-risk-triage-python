@@ -4,6 +4,7 @@
   同 key 不同载荷则报 DuplicateSubmissionError（可区分原因）。
 - 状态流转仅允许 ALLOWED_TRANSITIONS 中的跃迁。
 - 同一病例的评估只保存一次，并发下结论唯一。
+- 评估轨迹只增不改：同 (病例, 来源, 版本) 去重，按发生顺序可查。
 """
 from __future__ import annotations
 
@@ -14,7 +15,13 @@ from .errors import (
     DuplicateSubmissionError,
     IllegalTransitionError,
 )
-from .models import ALLOWED_TRANSITIONS, Assessment, CaseStatus, PatientCase
+from .models import (
+    ALLOWED_TRANSITIONS,
+    Assessment,
+    AssessmentRecord,
+    CaseStatus,
+    PatientCase,
+)
 
 
 class CaseStore:
@@ -23,6 +30,7 @@ class CaseStore:
         self._cases: dict[str, PatientCase] = {}
         self._status: dict[str, CaseStatus] = {}
         self._assessments: dict[str, Assessment] = {}
+        self._records: dict[str, list[AssessmentRecord]] = {}
         self._idempotency: dict[str, str] = {}  # key -> case_id
 
     def submit(self, idempotency_key: str, case: PatientCase) -> PatientCase:
@@ -80,3 +88,25 @@ class CaseStore:
                 raise CaseNotFoundError(
                     f"病例 {case_id} 尚无评估结论"
                 ) from None
+
+    def append_record(self, record: AssessmentRecord) -> AssessmentRecord:
+        """追加轨迹记录；同 (病例, 来源, 规则版本) 去重返回既有记录。
+
+        记录只增不改：新规则版本上线不会冲掉历史记录。
+        """
+        with self._lock:
+            for existing in self._records.get(record.case_id, ()):
+                if (
+                    existing.kind == record.kind
+                    and existing.rule_version == record.rule_version
+                ):
+                    return existing
+            self._records.setdefault(record.case_id, []).append(record)
+            return record
+
+    def list_records(self, case_id: str) -> list[AssessmentRecord]:
+        """按发生顺序返回病例的完整评估轨迹（副本，不可外部改写）。"""
+        with self._lock:
+            if case_id not in self._cases:
+                raise CaseNotFoundError(f"病例不存在: {case_id}")
+            return list(self._records.get(case_id, ()))
